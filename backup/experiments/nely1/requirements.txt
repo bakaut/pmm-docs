@@ -1,0 +1,4 @@
+requests
+supabase
+python-json-logger
+requests-toolbelt

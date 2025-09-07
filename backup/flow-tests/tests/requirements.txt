@@ -1,0 +1,12 @@
+pytest>=7.0.0
+pytest-mock>=3.6.0
+pytest-cov>=4.0.0
+requests
+psycopg2-binary
+python-json-logger
+requests-toolbelt
+tiktoken
+mutagen
+boto3
+pydantic
+pydantic-settings

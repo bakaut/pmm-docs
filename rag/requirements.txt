@@ -1,0 +1,9 @@
+requests==2.31.0
+supabase-py==1.15.1
+python-json-logger
+requests-toolbelt
+psycopg2-binary==2.9.6
+sqlalchemy==2.0.19
+pgvector==0.7.0
+langchain==0.0.318
+openai==0.27.8

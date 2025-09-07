@@ -1,0 +1,420 @@
+diff --git a/flow/index.py b/flow/index.py
+index f8b6185..089103e 100644
+--- a/flow/index.py
++++ b/flow/index.py
+@@ -13,6 +13,7 @@ from mindset.utils import Utils
+ from mindset.llm_manager import LLMManager
+ from mindset.moderation import ModerationService
+ from mindset.suno_manager import SunoManager
++# from mindset.summary_manager import SummaryManager  # Add this import
+ 
+ # Configuration from environment variables
+ config = Config.from_env()
+@@ -32,6 +33,8 @@ llm = LLMManager(config, utils, logger)
+ moderation_service = ModerationService(db, telegram_bot, logger)
+ # Suno manager
+ suno_manager = SunoManager(config, db, telegram_bot, utils, llm, logger)
++# Summary manager
++# summary_manager = SummaryManager(config, db, None, llm, logger)  # Cache manager will be set later if needed
+ 
+ logger.debug("Configuration loaded")
+ 
+@@ -90,7 +93,14 @@ def handler(event: Dict[str, Any], context):
+     last_3_assistant_messages = ctx["last_3_assistant_messages"]
+     last_8_user_messages = ctx["last_8_user_messages"]
+     openai_msgs = ctx["openai_msgs"]
+-    last_2500_token_messages = ctx["last_2500_token_messages"]
++    #last_2500_token_messages = ctx["last_2500_token_messages"]
++    # Может по тупому каждые 2500 символов то есть делится без остатка на 2500 ближайшее overlap на 300 500 символов погрешность?
++
++    # Process conversation summarization
++    #try:
++    #    summary_manager.process_conversation(session_uuid)
++    #except Exception as e:
++    #    logger.error("Error processing conversation summarization: %s", e)
+ 
+     # Detect intent emotion and state - in parallel
+     with ThreadPoolExecutor(max_workers=3) as executor:
+@@ -98,18 +108,18 @@ def handler(event: Dict[str, Any], context):
+         future_intent = executor.submit(llm.llm_conversation, last_8_messages, config.system_prompt_intent, True)
+         future_emotion = executor.submit(llm.llm_conversation, last_8_user_messages, config.system_prompt_detect_emotion, True)
+         future_state = executor.submit(llm.llm_conversation, last_8_messages, config.system_prompt_detect_state, True)
+-        future_summary = executor.submit(llm.llm_conversation, last_2500_token_messages, config.system_prompt_summarization, True)
++        #future_summary = executor.submit(llm.llm_conversation, last_2500_token_messages, config.system_prompt_summarization, True)
+ 
+         # Collect results as they complete
+         detect_intent = future_intent.result()
+         detect_emotion = future_emotion.result()
+         detect_state = future_state.result()
+-        create_summary = future_summary.result()
++        #create_summary = future_summary.result()
+ 
+     logger.debug("User emotion: %s", detect_emotion)
+     logger.debug("User intent: %s", detect_intent)
+     logger.debug("User state: %s", detect_state)
+-    logger.debug("Conversation summary:", extra={"summary": create_summary})
++    #logger.debug("Conversation summary:", extra={"summary": create_summary})
+ 
+     # Save intent and emotion analysis to DB
+     analysis = {"intent": detect_intent, "emotion": detect_emotion}
+@@ -199,4 +209,4 @@ def handler(event: Dict[str, Any], context):
+     except Exception:
+         logger.exception("Failed to send message to Telegram %s", chat_id)
+ 
+-    return {"statusCode": 200, "body": ""}
++    return {"statusCode": 200, "body": ""}
+\ No newline at end of file
+diff --git a/flow/knowledge_bases/templates/prompts/summarize_conversation.txt b/flow/knowledge_bases/templates/prompts/summarize_conversation.txt
+index 58a7d3b..78c4f4d 100644
+--- a/flow/knowledge_bases/templates/prompts/summarize_conversation.txt
++++ b/flow/knowledge_bases/templates/prompts/summarize_conversation.txt
+@@ -18,7 +18,7 @@
+ 
+ Вход:
+ 
+-Мета: conversation_id={conversation_id}, период: {period_hint}, текущее время (UTC): {now_utc}, лимит токенов на готовую сводку: {target_tokens}.
++Мета: session_id={session_id}, период: {period_hint}, текущее время (UTC): {now_utc}, лимит токенов на готовую сводку: {target_tokens}.
+ 
+ Сообщения: массив JSON {messages_json} со схемой:
+ 
+diff --git a/flow/mindset/database.py b/flow/mindset/database.py
+index 975af95..f4ad105 100644
+--- a/flow/mindset/database.py
++++ b/flow/mindset/database.py
+@@ -14,7 +14,7 @@ import json
+ import logging
+ import uuid
+ from datetime import datetime, timezone, timedelta
+-from typing import Any, Dict, List, Optional
++from typing import Any, Dict, List, Optional, Tuple
+ 
+ from psycopg2 import connect, Error as PgError
+ from psycopg2.extras import RealDictCursor
+@@ -315,6 +315,273 @@ class DatabaseManager:
+             (task_id,)
+         )
+ 
++    # ──────────────────────────
++    #  SUMMARY OPERATIONS
++    # ──────────────────────────
++
++    def get_conversation_hwm(self, session_id: str) -> Optional[str]:
++        """Get the High Water Mark for a conversation session."""
++        rec = self.query_one(
++            "SELECT summary_hwm_msg_id FROM conversation_sessions WHERE id = %s",
++            (session_id,)
++        )
++        return str(rec["summary_hwm_msg_id"]) if rec and rec["summary_hwm_msg_id"] else "00000000-0000-0000-0000-000000000000"
++
++    def get_unsummarized_messages(self, session_id: str, hwm_msg_id: str) -> List[Dict[str, Any]]:
++        """Get messages that haven't been summarized yet."""
++        return self.query_all(
++            "SELECT id, content, content_hash, token_count, created_at, role "
++            "FROM messages "
++            "WHERE session_id = %s AND id::text > %s "
++            "ORDER BY id",
++            (session_id, str(hwm_msg_id))
++        )
++
++    def get_counters_since_hwm(self, session_id: str, hwm_msg_id: str) -> Dict[str, Any]:
++        """
++        Compute counters since HWM: messages, tokens, time, topic drift.
++
++        Args:
++            session_id: Session UUID
++            hwm_msg_id: High Water Mark message ID (UUID as string)
++
++        Returns:
++            Dict with delta counters
++        """
++        # Get messages after HWM
++        sql = """
++            SELECT id, token_count, created_at
++            FROM messages
++            WHERE session_id = %s
++              AND id::text > %s
++            ORDER BY id
++        """
++        messages = self.query_all(sql, (session_id, str(hwm_msg_id)))
++
++        if not messages:
++            return {
++                "delta_messages": 0,
++                "delta_tokens": 0,
++                "delta_minutes": 0.0,
++                "topic_drift": 0.0
++            }
++
++        # Compute message and token counts
++        delta_messages = len(messages)
++        delta_tokens = sum(msg.get("token_count", 0) for msg in messages)
++
++        # Compute time delta (minutes)
++        first_msg_time = messages[0]["created_at"]
++        last_msg_time = messages[-1]["created_at"]
++        delta_minutes = (last_msg_time - first_msg_time).total_seconds() / 60.0
++
++        # TODO: Implement topic drift calculation using embeddings
++        # For now, we'll return 0.0 as a placeholder
++        topic_drift = 0.0
++
++        return {
++            "delta_messages": delta_messages,
++            "delta_tokens": delta_tokens,
++            "delta_minutes": delta_minutes,
++            "topic_drift": topic_drift
++        }
++
++    def compute_summary_cutoff(self, session_id: str, hwm_msg_id: str) -> str:
++        """
++        Compute cutoff message ID for summarization window.
++
++        Args:
++            session_id: Session UUID
++            hwm_msg_id: High Water Mark message ID (UUID as string)
++
++        Returns:
++            str: Cutoff message ID (UUID as string)
++        """
++        # For now, we'll use a simple heuristic - take all messages after HWM
++        # In a more advanced implementation, we might use topic boundaries
++        sql = """
++            SELECT MAX(id::text) as max_id
++            FROM messages
++            WHERE session_id = %s
++              AND id::text > %s
++        """
++        result = self.query_one(sql, (session_id, str(hwm_msg_id)))
++        return result["max_id"] if result and result["max_id"] else hwm_msg_id
++
++    def check_existing_summary(self, session_id: str, hwm_msg_id: str, cutoff_id: str, window_hash: str) -> Optional[str]:
++        """
++        Check if a summary already exists for the given window.
++
++        Args:
++            session_id: Session UUID
++            hwm_msg_id: High Water Mark message ID (UUID as string)
++            cutoff_id: Cutoff message ID (UUID as string)
++            window_hash: Hash of the window content
++
++        Returns:
++            str: Existing summary text or None if not found
++        """
++        sql = """
++            SELECT summary_text FROM summaries
++            WHERE session_id = %s
++              AND from_msg_id::text = %s
++              AND to_msg_id::text = %s
++              AND input_hash = %s
++        """
++        existing = self.query_one(sql, (session_id, str(hwm_msg_id), str(cutoff_id), window_hash))
++        return existing["summary_text"] if existing else None
++
++    def get_messages_in_window(self, session_id: str, from_msg_id: str, to_msg_id: str) -> List[Dict[str, Any]]:
++        """
++        Get messages in a specific window.
++
++        Args:
++            session_id: Session UUID
++            from_msg_id: Starting message ID (UUID as string)
++            to_msg_id: Ending message ID (UUID as string)
++
++        Returns:
++            List of message dictionaries
++        """
++        sql = """
++            SELECT id, content_hash, token_count, created_at
++            FROM messages
++            WHERE session_id = %s
++              AND id::text >= %s
++              AND id::text <= %s
++            ORDER BY id
++        """
++        return self.query_all(sql, (session_id, str(from_msg_id), str(to_msg_id)))
++
++    def save_summary(self, session_id: str, from_msg_id: str, to_msg_id: str,
++                    summary_text: str, trigger_reason: str, input_hash: str) -> str:
++        """Save a conversation summary and return summary ID."""
++        summary_id = str(uuid.uuid4())
++        self.execute(
++            "INSERT INTO summaries("
++            "id, session_id, from_msg_id, to_msg_id, summary_text, "
++            "trigger, input_hash, created_at) "
++            "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())",
++            (summary_id, session_id, from_msg_id, to_msg_id, summary_text,
++             trigger_reason, input_hash)
++        )
++        self.logger.debug("Saved summary %s for session %s", summary_id, session_id)
++        return summary_id
++
++    def update_conversation_hwm(self, session_id: str, new_hwm: str):
++        """Update the High Water Mark for a conversation session."""
++        self.execute(
++            "UPDATE conversation_sessions "
++            "SET summary_hwm_msg_id = %s, last_summary_at = NOW(), "
++            "msgs_since_summary = 0, tokens_since_summary = 0 "
++            "WHERE id = %s",
++            (new_hwm, session_id)
++        )
++        self.logger.debug("Updated HWM to %s for session %s", new_hwm, session_id)
++
++    def get_last_summary(self, session_id: str) -> Optional[Dict[str, Any]]:
++        """Get the most recent summary for a conversation session."""
++        return self.query_one(
++            "SELECT * FROM summaries "
++            "WHERE session_id = %s "
++            "ORDER BY created_at DESC LIMIT 1",
++            (session_id,)
++        )
++
++    def should_summarize_check(self, session_id: str, min_msgs: int, max_msgs: int, 
++                              min_tokens: int, max_tokens: int, min_minutes: int, 
++                              max_minutes: int, topic_drift_threshold: float, 
++                              cooldown_seconds: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
++        """
++        Determine if session should be summarized based on counters.
++
++        Args:
++            session_id: Session UUID
++            min_msgs: Minimum messages threshold
++            max_msgs: Maximum messages threshold
++            min_tokens: Minimum tokens threshold
++            max_tokens: Maximum tokens threshold
++            min_minutes: Minimum minutes threshold
++            max_minutes: Maximum minutes threshold
++            topic_drift_threshold: Topic drift threshold
++            cooldown_seconds: Cooldown period in seconds
++
++        Returns:
++            Tuple of (should_summarize, trigger_info)
++        """
++        # Get current HWM and last summary time
++        sql = """
++            SELECT summary_hwm_msg_id, last_summary_at
++            FROM conversation_sessions
++            WHERE id = %s
++        """
++        session = self.query_one(sql, (session_id,))
++        if not session:
++            return False, None
++
++        hwm_msg_id = session["summary_hwm_msg_id"]
++        last_summary_at = session["last_summary_at"]
++
++        # Check cooldown period
++        if last_summary_at:
++            seconds_since_summary = (datetime.now(timezone.utc) - last_summary_at).total_seconds()
++            if seconds_since_summary < cooldown_seconds:
++                self.logger.debug("In cooldown period (%.1fs remaining)",
++                                cooldown_seconds - seconds_since_summary)
++                return False, None
++
++        # Compute counters since HWM
++        counters = self.get_counters_since_hwm(session_id, hwm_msg_id)
++        delta_msgs = counters["delta_messages"]
++        delta_tokens = counters["delta_tokens"]
++        delta_minutes = counters["delta_minutes"]
++        topic_drift = counters["topic_drift"]
++
++        self.logger.debug("Counters since HWM: msgs=%d, tokens=%d, minutes=%.1f, topic_drift=%.2f",
++                         delta_msgs, delta_tokens, delta_minutes, topic_drift)
++
++        # Check if any max threshold is exceeded
++        max_exceeded = (
++            delta_msgs >= max_msgs or
++            delta_tokens >= max_tokens or
++            delta_minutes >= max_minutes or
++            topic_drift >= topic_drift_threshold
++        )
++
++        # Check if any min threshold is met (only if max not exceeded yet)
++        min_met = (
++            delta_msgs >= min_msgs or
++            delta_tokens >= min_tokens or
++            delta_minutes >= min_minutes
++        )
++
++        # Apply hysteresis rule: summarize if (any max) AND (any min) OR topic shift
++        should_trigger = (max_exceeded and min_met) or (topic_drift >= topic_drift_threshold)
++
++        if should_trigger:
++            # Determine primary trigger reason
++            if topic_drift >= topic_drift_threshold:
++                reason = "topic_shift"
++            elif delta_msgs >= max_msgs:
++                reason = "turns"
++            elif delta_tokens >= max_tokens:
++                reason = "tokens"
++            elif delta_minutes >= max_minutes:
++                reason = "time"
++            else:
++                reason = "unknown"
++
++            trigger_info = {
++                "reason": reason,
++                "delta_messages": delta_msgs,
++                "delta_tokens": delta_tokens,
++                "delta_minutes": delta_minutes,
++                "topic_drift": topic_drift
++            }
++            return True, trigger_info
++
++        return False, None
++
+     # ──────────────────────────
+     #  MODERATION OPERATIONS
+     # ──────────────────────────
+diff --git a/flow/mindset/utils.py b/flow/mindset/utils.py
+index 3ef76e8..9f578c9 100644
+--- a/flow/mindset/utils.py
++++ b/flow/mindset/utils.py
+@@ -6,6 +6,7 @@ import string
+ import os
+ import re
+ import textwrap
++import hashlib
+ import yaml
+ from typing import Any, Dict, Optional, List
+ 
+@@ -902,6 +903,41 @@ class Utils:
+ 
+         return escaped
+ 
++    @staticmethod
++    def create_content_signature(content: str) -> str:
++        """
++        Create a SHA256 signature of content for hashing purposes.
++        
++        Args:
++            content: Content to hash
++            
++        Returns:
++            str: SHA256 hex digest of content
++        """
++        return hashlib.sha256(content.encode('utf-8')).hexdigest()
++
++    def compute_message_window_hash(self, messages: List[Dict[str, Any]]) -> str:
++        """
++        Compute SHA256 hash of message window for idempotency.
++        
++        Args:
++            messages: List of messages in the window
++            
++        Returns:
++            str: SHA256 hex digest
++        """
++        if not messages:
++            return hashlib.sha256(b"").hexdigest()
++            
++        # Concatenate message IDs and content hashes for deterministic hashing
++        hash_input = ""
++        for msg in messages:
++            msg_id = str(msg.get("id", ""))
++            content_hash = msg.get("content_hash", "") or ""
++            hash_input += f"{msg_id}:{content_hash};"
++            
++        return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
++
+     @staticmethod
+     def clean_json_string(s: str) -> dict:
+         # убираем тройные кавычки ```json и ```

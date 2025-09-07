@@ -1,0 +1,8 @@
+requests
+psycopg2-binary
+python-json-logger
+requests-toolbelt
+tiktoken
+pydantic
+pytest
+python-dotenv

@@ -1,0 +1,230 @@
+diff --git a/flow/index.py b/flow/index.py
+index ac63500..7bc67e8 100644
+--- a/flow/index.py
++++ b/flow/index.py
+@@ -1,24 +1,30 @@
+ # Standard library imports
++import json
+ import logging
+-import random
+-from typing import Any, Dict
+-from concurrent.futures import ThreadPoolExecutor, as_completed
++import os
++import uuid
++from concurrent.futures import ThreadPoolExecutor
++from typing import List, Dict, Any, Optional
++
++import psycopg2
+ 
+ # Local imports
+ from mindset.config import Config
+ from mindset.database import DatabaseManager
++from mindset.llm_manager import LLMManager
+ from mindset.logger import get_default_logger
+-from mindset.telegram_bot import TelegramBot
+ from mindset.utils import Utils
+-from mindset.llm_manager import LLMManager
+-from mindset.moderation import ModerationService
+-from mindset.suno_manager import SunoManager
+-
+-# Configuration from environment variables
+-config = Config.from_env()
+-# Создаем логгер с настройками из конфигурации
+-log_level = getattr(logging, config.log_level.upper(), logging.DEBUG)
+-logger = get_default_logger(config.log_name, log_level)
++from mindset.intent_detector import IntentDetector, IntentDetectionMode
++
++
++# ---- Configuration and Setup -------------------------------------------------
++
++# Setup logging first
++logger = get_default_logger('flow')
++
++# Load configuration
++config = Config.load()
++
+ # Telegram bot
+ telegram_bot = TelegramBot(config)
+ # Database manager - using direct instantiation instead of factory pattern
+@@ -38,7 +44,8 @@ logger.debug("Configuration loaded")
+ bot_id = db.get_or_create_bot(config.bot_token)
+ logger.debug("Bot initialized with ID %s", bot_id)
+ 
+-def handler(event: Dict[str, Any], context):
++
++def handler(event, context) -> Dict[str, Any]:
+     logger.debug("Incoming event: %s", event)
+     body = utils.parse_body(event)
+     logger.debug("Incoming body: %s", body)
+@@ -92,10 +99,10 @@ def handler(event: Dict[str, Any], context):
+     summary_messages = ctx["summary_messages"]
+     create_summary = {}
+ 
+-    # Detect intent emotion and state - in parallel
++    # Detect emotion and state - in parallel (keeping existing approach for these)
+     with ThreadPoolExecutor(max_workers=3) as executor:
+         # Submit all tasks
+-        future_intent = executor.submit(llm.llm_conversation, last_8_messages, config.system_prompt_intent, True)
++        future_intent = executor.submit(_detect_intent_hybrid, text, last_8_messages, config, llm, db, utils, logger)
+         future_emotion = executor.submit(llm.llm_conversation, last_8_user_messages, config.system_prompt_detect_emotion, True)
+         future_state = executor.submit(llm.llm_conversation, last_8_messages, config.system_prompt_detect_state, True)
+ 
+@@ -118,14 +125,17 @@ def handler(event: Dict[str, Any], context):
+     db.update_message_analysis(msg_id, analysis)
+ 
+     # Save intent and state to the new statuses table
++    intent_data = detect_intent if isinstance(detect_intent, dict) else {"class": str(detect_intent)}
++    state_data = detect_state if isinstance(detect_state, dict) else {"class": str(detect_state)}
++    
+     db.save_status(
+         session_uuid,
+         user_uuid,
+         msg_id,
+-        state=detect_state.get("class") if isinstance(detect_state, dict) else str(detect_state),
+-        state_reason=detect_state.get("reason") if isinstance(detect_state, dict) else None,
+-        intent=detect_intent.get("class") if isinstance(detect_intent, dict) else str(detect_intent),
+-        intent_reason=detect_intent.get("reason") if isinstance(detect_intent, dict) else None
++        state=state_data.get("class"),
++        state_reason=state_data.get("reason"),
++        intent=intent_data.get("class"),
++        intent_reason=intent_data.get("reason")
+     )
+ 
+     if summary_messages:
+@@ -215,3 +225,63 @@ def handler(event: Dict[str, Any], context):
+         logger.exception("Failed to send message to Telegram %s", chat_id)
+ 
+     return {"statusCode": 200, "body": ""}
++
++def _detect_intent_hybrid(user_message: str, conversation_history: List[Dict[str, str]], 
++                         config: Config, llm: LLMManager, db: DatabaseManager, 
++                         utils: Utils, logger: logging.Logger) -> Dict[str, Any]:
++    """
++    Detect user intent using the new hybrid approach.
++    
++    Args:
++        user_message: The user's current message
++        conversation_history: Recent conversation history
++        config: Configuration object
++        llm: LLM manager
++        db: Database manager
++        utils: Utilities
++        logger: Logger instance
++        
++    Returns:
++        Dictionary with intent detection results
++    """
++    try:
++        # Create intent detector
++        intent_detector = IntentDetector(config, llm, db, utils, logger)
++        
++        # Prepare context
++        context = {
++            "history": conversation_history,
++            "user_message": user_message
++        }
++        
++        # Detect intent using hybrid approach
++        detected_intent = intent_detector.detect_intent(
++            user_message=user_message,
++            context=context,
++            mode=IntentDetectionMode.HYBRID
++        )
++        
++        # Convert to expected format
++        result = {
++            "class": detected_intent.intent_id,
++            "confidence": detected_intent.confidence,
++            "entities": detected_intent.entities,
++            "reason": detected_intent.reason,
++            "mode": detected_intent.mode.value,
++            "candidates": [
++                {
++                    "intent": candidate.intent_id,
++                    "confidence": candidate.confidence,
++                    "source": candidate.source
++                }
++                for candidate in detected_intent.candidates
++            ]
++        }
++        
++        logger.debug(f"Hybrid intent detection result: {result}")
++        return result
++        
++    except Exception as e:
++        logger.error(f"Hybrid intent detection failed: {e}")
++        # Fallback to original approach
++        return llm.llm_conversation(conversation_history, config.system_prompt_intent, True)
+\ No newline at end of file
+diff --git a/flow/mindset/telegram_bot.py b/flow/mindset/telegram_bot.py
+index b912190..01a8bde 100644
+--- a/flow/mindset/telegram_bot.py
++++ b/flow/mindset/telegram_bot.py
+@@ -367,12 +367,16 @@ class TelegramBot:
+                 self.send_message_chunks(tg_user_id, "💞 Спасибо за поддержку! Обнимаю тебя в ответ!")
+                 # Для callback сообщений используем 0 как tg_msg_id, т.к. это не обычное сообщение
+                 db.save_message(session_uuid, user_uuid, "assistant", "обнял автора", llm.embd_text("обнял автора"), 0)
++                # Save intent to statuses table with proper format
++                self._save_callback_intent(db, session_uuid, user_uuid, "donate", "User selected hug author callback")
+ 
+             elif data == "silence_room":
+                 # Комната тишины
+                 self.send_message_chunks(tg_user_id, want_silence_message)
+                 # Для callback сообщений используем 0 как tg_msg_id, т.к. это не обычное сообщение
+                 db.save_message(session_uuid, user_uuid, "assistant", "пользователь хочет остаться в тишине", llm.embd_text("пользователь хочет остаться в тишине"), 0)
++                # Save intent to statuses table with proper format
++                self._save_callback_intent(db, session_uuid, user_uuid, "pause", "User requested silence room")
+ 
+             elif data == "reset_session":
+                 # Сбросить текущую сессию
+@@ -382,9 +386,39 @@ class TelegramBot:
+                 new_session_uuid = db.get_active_session(user_uuid, bot_id, session_lifetime)
+                 # Сохраняем сообщение о сбросе в новую сессию
+                 db.save_message(new_session_uuid, user_uuid, "assistant", "пользователь сбросил сессию", llm.embd_text("пользователь сбросил сессию"), 0)
++                # Save intent to statuses table with proper format
++                self._save_callback_intent(db, new_session_uuid, user_uuid, "cancel", "User reset session")
+ 
+             return {"statusCode": 200, "body": ""}
+ 
+         except Exception as e:
+             self.logger.error("Error handling callback query: %s", str(e))
+             return {"statusCode": 500, "body": f"Error: {str(e)}"}
++
++    def _save_callback_intent(self, db, session_uuid: str, user_uuid: str, intent: str, reason: str):
++        """
++        Save callback-based intent to the statuses table with proper format.
++        
++        Args:
++            db: Database instance
++            session_uuid: Session UUID
++            user_uuid: User UUID
++            intent: Intent ID
++            reason: Reason for the intent
++        """
++        try:
++            # Create a dummy message ID for callback intents
++            dummy_msg_id = str(uuid.uuid4())
++            
++            # Save to statuses table with proper format
++            db.save_status(
++                session_id=session_uuid,
++                user_id=user_uuid,
++                message_id=dummy_msg_id,
++                intent=intent,
++                intent_reason=reason
++            )
++            
++            self.logger.debug(f"Saved callback intent '{intent}' to statuses table")
++        except Exception as e:
++            self.logger.error(f"Failed to save callback intent: {e}")
+diff --git a/flow/requirements.txt b/flow/requirements.txt
+index f8ed40e..3d94c83 100644
+--- a/flow/requirements.txt
++++ b/flow/requirements.txt
+@@ -9,3 +9,5 @@ pydantic
+ pydantic-settings
+ jinja2
+ PyYAML
++numpy
++scikit-learn
+\ No newline at end of file

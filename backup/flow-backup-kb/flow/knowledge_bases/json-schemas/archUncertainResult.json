@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UncertainResult",
+  "type": "object",
+  "required": ["class", "confidence", "steps", "reason", "next_actions"],
+  "properties": {
+    "class": {"type": "string", "const": "UNCERTAIN"},
+    "confidence": {"type": "integer", "maximum": 69, "minimum": 0},
+    "steps": {"type": "integer", "minimum": 5},
+    "reason": {"type": "string"},
+    "next_actions": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "biases": {"type": "array", "items": {"type": "string"}},
+    "meta": {"type": "object"}
+  },
+  "additionalProperties": false
+}

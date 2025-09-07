@@ -1,0 +1,9 @@
+requests
+psycopg2-binary
+python-json-logger
+requests-toolbelt
+tiktoken
+mutagen
+boto3
+pydantic
+pydantic-settings

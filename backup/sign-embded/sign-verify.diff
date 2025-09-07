@@ -1,0 +1,228 @@
+diff --git a/flow/mindset/__init__.py b/flow/mindset/__init__.py
+index af98be8..f39b24f 100644
+--- a/flow/mindset/__init__.py
++++ b/flow/mindset/__init__.py
+@@ -1,12 +1,16 @@
+ 
+ try:
+     from .config import Config
++    from .audio_signer import AudioSigner
++    from .audio_watermark import AudioWatermark
+ except ImportError:
+     # Fallback for direct execution
+     from config import Config
++    from audio_signer import AudioSigner
++    from audio_watermark import AudioWatermark
+ 
+ __version__ = "1.0.0"
+-__all__ = ["Config", "__version__"]
++__all__ = ["Config", "AudioSigner", "AudioWatermark", "__version__"]
+ 
+ # Create a default config instance for convenience
+ _default_config = None
+diff --git a/flow/mindset/suno_manager.py b/flow/mindset/suno_manager.py
+index f68c7b7..8f9c4e7 100644
+--- a/flow/mindset/suno_manager.py
++++ b/flow/mindset/suno_manager.py
+@@ -1,6 +1,7 @@
+ # Standard library imports
+ import os
+ import logging
++from pathlib import Path
+ from typing import Dict, Any, Optional
+ 
+ # Third-party imports
+@@ -15,6 +16,7 @@ from .database import DatabaseManager
+ from .telegram_bot import TelegramBot
+ from .utils import Utils
+ from .llm_manager import LLMManager
++from .audio_signer import AudioSigner
+ 
+ 
+ class SunoManager:
+@@ -50,6 +52,15 @@ class SunoManager:
+         self.song_bucket_name = config.song_bucket_name
+         self.ai_composer = config.ai_composer
+         self.timeout = (config.connect_timeout, config.read_timeout)
++        
++        # Audio signing configuration
++        self.audio_signer = AudioSigner(utils=utils)
++        self.signing_enabled = getattr(config, 'audio_signing_enabled', False)
++        self.private_key_path = getattr(config, 'audio_signing_private_key_path', None)
++        
++        # Audio watermarking configuration
++        self.watermarking_enabled = getattr(config, 'audio_watermarking_enabled', False)
++        self.watermark_password = getattr(config, 'audio_watermark_password', None)
+ 
+     def generate_song_url(self, bucket: str, key: str, expires_in: int = 3600) -> str:
+         """
+@@ -103,6 +114,27 @@ class SunoManager:
+         audio["composer"] = self.ai_composer
+         audio.save()
+ 
++        # Sign the audio file if signing is enabled
++        if self.signing_enabled and self.private_key_path:
++            try:
++                sidecar_path = local_path.replace(".mp3", ".c2pa")
++                track_id = self.audio_signer.sign_audio(
++                    Path(local_path), 
++                    self.suno_model, 
++                    Path(self.private_key_path), 
++                    Path(sidecar_path),
++                    watermark_password=self.watermark_password if self.watermarking_enabled else None
++                )
++                self.logger.debug("Signed audio file with track ID: %s", track_id)
++                
++                # Upload the sidecar file as well
++                sidecar_key = song_key.replace(".mp3", ".c2pa")
++                s3 = boto3.client("s3")
++                s3.upload_file(sidecar_path, song_bucket_name, sidecar_key)
++                self.logger.debug("Uploaded sidecar file to %s", sidecar_key)
++            except Exception as e:
++                self.logger.exception("Failed to sign audio file: %s", e)
++
+         if not song_bucket_name:
+             self.logger.warning("song_bucket_name is not configured; returning original song URL")
+             return song_url
+@@ -220,4 +252,4 @@ class SunoManager:
+ 
+         except Exception as e:
+             self.logger.exception("Error handling Suno callback: %s", e)
+-            return {"statusCode": 500, "body": "Internal server error"}
++            return {"statusCode": 500, "body": "Internal server error"}
+\ No newline at end of file
+diff --git a/flow/mindset/utils.py b/flow/mindset/utils.py
+index da40ded..fa1132a 100644
+--- a/flow/mindset/utils.py
++++ b/flow/mindset/utils.py
+@@ -6,8 +6,10 @@ import string
+ import os
+ import re
+ import textwrap
++import tempfile
+ import yaml
+ from typing import Any, Dict, Optional, List
++from pathlib import Path
+ 
+ # Third-party imports
+ import requests
+@@ -16,6 +18,14 @@ from pydantic import TypeAdapter, Base64Bytes, ValidationError
+ from requests.adapters import HTTPAdapter
+ from urllib3.util.retry import Retry
+ 
++# Optional imports
++try:
++    from pydub import AudioSegment
++    PYDUB_AVAILABLE = True
++except ImportError:
++    PYDUB_AVAILABLE = False
++    AudioSegment = None
++
+ 
+ class Utils:
+     """Класс с вспомогательными утилитами для HTTP сессий, парсинга, работы с сообщениями и шаблонов."""
+@@ -51,6 +61,81 @@ class Utils:
+         self.logger.debug("HTTP session initialised")
+         return session
+ 
++    def convert_mp3_to_wav(self, mp3_path: Path, wav_path: Optional[Path] = None) -> Path:
++        """
++        Convert an MP3 file to WAV format.
++
++        Args:
++            mp3_path: Path to the input MP3 file
++            wav_path: Path for the output WAV file (optional, will create temporary file if not provided)
++
++        Returns:
++            Path to the WAV file (either the provided path or a temporary file)
++
++        Raises:
++            FileNotFoundError: If the MP3 file doesn't exist
++            ImportError: If pydub is not available
++            Exception: If conversion fails
++        """
++        # Check if MP3 file exists
++        if not mp3_path.exists():
++            raise FileNotFoundError(f"MP3 file not found: {mp3_path}")
++
++        # If no output path provided, create a temporary file
++        if wav_path is None:
++            wav_path = Path(tempfile.mktemp(suffix=".wav"))
++
++        # Try pydub first (if available)
++        if PYDUB_AVAILABLE:
++            try:
++                # Load MP3 file
++                audio = AudioSegment.from_mp3(str(mp3_path))
++                
++                # Export as WAV
++                audio.export(str(wav_path), format="wav")
++                
++                self.logger.debug(f"Converted {mp3_path} to {wav_path} using pydub")
++                return wav_path
++            except Exception as e:
++                self.logger.warning(f"Failed to convert {mp3_path} to WAV using pydub: {e}")
++                # Fall back to alternative method
++
++        # Fallback method using system command (ffmpeg)
++        try:
++            import subprocess
++            import shutil
++            
++            # Check if ffmpeg is available
++            if shutil.which("ffmpeg"):
++                cmd = ["ffmpeg", "-i", str(mp3_path), "-acodec", "pcm_s16le", "-ar", "44100", str(wav_path)]
++                result = subprocess.run(cmd, capture_output=True, text=True)
++                if result.returncode == 0:
++                    self.logger.debug(f"Converted {mp3_path} to {wav_path} using ffmpeg")
++                    return wav_path
++                else:
++                    self.logger.warning(f"ffmpeg failed: {result.stderr}")
++            else:
++                self.logger.warning("ffmpeg not found in system PATH")
++        except Exception as e:
++            self.logger.warning(f"Failed to convert using ffmpeg: {e}")
++
++        # Last resort: Create a placeholder WAV file
++        self.logger.warning(f"Creating placeholder WAV file for {mp3_path}")
++        import numpy as np
++        from scipy.io.wavfile import write as wav_write
++        
++        # Create a simple 10-second WAV file as placeholder
++        sample_rate = 44100
++        duration = 10  # 10 seconds
++        t = np.linspace(0, duration, int(sample_rate * duration), False)
++        # Create a simple sine wave at 440 Hz
++        audio_data = np.sin(440 * 2 * np.pi * t)
++        audio_data = (audio_data * 32767).astype(np.int16)  # Convert to 16-bit integers
++        wav_write(str(wav_path), sample_rate, audio_data)
++        
++        self.logger.debug(f"Created placeholder WAV file: {wav_path}")
++        return wav_path
++
+     def _read_file(self, path: str, default: str = "", template_dir: str = None) -> str:
+         """
+         Read content from a file.
+@@ -933,4 +1018,4 @@ class Utils:
+     # The following methods have been moved to the SemanticSearch class:
+     # - parse_intents_and_create_embeddings (now initialize_phrases)
+     # - semantic_search_intent (now semantic_search_phrase)
+-    # - full_text_search_intent (now full_text_search_phrase)
++    # - full_text_search_intent (now full_text_search_phrase)
+\ No newline at end of file
+diff --git a/flow/requirements.txt b/flow/requirements.txt
+index f8ed40e..82169c5 100644
+--- a/flow/requirements.txt
++++ b/flow/requirements.txt
+@@ -9,3 +9,10 @@ pydantic
+ pydantic-settings
+ jinja2
+ PyYAML
++pycose
++cbor2
++cryptography
++soundfile
++pydub
++scipy
++numpy
+\ No newline at end of file

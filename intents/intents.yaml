@@ -1,0 +1,369 @@
+- id: start
+  title: "Старт и приветствие"
+  description: "Начать диалог, коротко представить бота"
+  triggers:
+    commands: ["/start", "/hello"]
+    keywords_any: ["привет", "начать", "старт", "кто ты", "что умеешь"]
+  examples_pos:
+    - "привет"
+    - "кто ты и что тут можно?"
+  examples_neg:
+    - "включи музыку"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_start"
+
+- id: set_name_preference
+  title: "Как обращаться по имени"
+  description: "Уточнить имя и частоту использования"
+  triggers:
+    commands: ["/name"]
+    keywords_any: ["зови меня", "меня зовут", "можешь иногда по имени"]
+  examples_pos:
+    - "меня зовут Коля"
+    - "зови меня по имени редко"
+  examples_neg:
+    - "как зовут тебя?"
+  slots:
+    - {name: name, type: text, required: false}
+    - {name: usage, type: enum[never,rare,always], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_name"
+
+- id: room_enter_silence
+  title: "Комната тишины — войти"
+  description: "Попросить побыть в тишине"
+  triggers:
+    commands: ["/silence", "/pause"]
+    keywords_any: ["комната тишины", "помолчим", "хочу тишины", "давай помолчим"]
+  examples_pos:
+    - "я хочу в комнату тишины"
+    - "давай помолчим"
+  examples_neg:
+    - "тишина в песне"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_silence_enter"
+
+- id: room_exit_silence
+  title: "Комната тишины — выйти"
+  description: "Вернуться из паузы"
+  triggers:
+    commands: ["/resume"]
+    keywords_any: ["я вернулся", "продолжим", "я готов", "выходим из тишины"]
+  examples_pos:
+    - "я вернулся из комнаты тишины"
+    - "продолжим"
+  examples_neg:
+    - "тишина нужна"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_silence_exit"
+
+- id: explore_emotion
+  title: "Поймать эмоцию/образ"
+  description: "Собрать чувство, образ, запах, телесное ощущение"
+  triggers:
+    commands: ["/feeling"]
+    keywords_any: ["чувствую", "эмоция", "образ", "запах", "воспоминание", "не знаю что чувствую"]
+  examples_pos:
+    - "я растерян"
+    - "запах абрикоса и шпал"
+  examples_neg:
+    - "покажи эмоции смайлами"
+  slots:
+    - {name: emotion, type: text, required: false}
+    - {name: memory, type: text, required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_emotion"
+
+- id: write_song
+  title: "Создать песню"
+  description: "Попросить сочинить/дописать песню"
+  triggers:
+    commands: ["/song", "/compose"]
+    keywords_any: ["песня", "куплет", "припев", "рифма", "допиши", "сделай песню"]
+    negative: ["плейлист", "spotify", "включи музыку"]
+  examples_pos:
+    - "сочини песню про надежду"
+    - "добавь припев к моему куплету"
+  examples_neg:
+    - "включи песню в плеере"
+  slots:
+    - {name: theme, type: text, required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_write_song"
+
+- id: refine_song
+  title: "Правки строки/куплета"
+  description: "Попросить изменить строку, ритм, рифму"
+  triggers:
+    commands: ["/edit", "/rewrite"]
+    keywords_any: ["поменяй строку", "слишком длинно", "другой ритм", "рифму другую"]
+  examples_pos:
+    - "сократи второй куплет"
+    - "замени 'гореть' на что-то без двойного смысла"
+  examples_neg:
+    - "редактор кода"
+  slots:
+    - {name: target_part, type: enum[verse,chorus,bridge,line], required: false}
+    - {name: new_hint, type: text, required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_refine"
+
+- id: arrange_song
+  title: "Аранжировка/стиль"
+  description: "Подобрать жанр, темп, инструменты, тип вокала"
+  triggers:
+    commands: ["/arrange", "/style"]
+    keywords_any: ["аранжировка", "стиль", "инструменты", "жанр", "темп", "вокал", "дуэт", "без вокализов"]
+  examples_pos:
+    - "гитарный перебор и скрипка, дуэт, без вокализов"
+    - "медленно → кульминация → затухание"
+  examples_neg:
+    - "аранжируй мой календарь"
+  slots:
+    - {name: genre, type: text, required: false}
+    - {name: instruments, type: list[text], required: false}
+    - {name: tempo, type: enum[slow,mid,fast], required: false}
+    - {name: vocals, type: enum[male,female,duet], required: false}
+    - {name: vocalises, type: enum[yes,no], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_arrange"
+
+- id: read_aloud
+  title: "Прочитать вслух (заглушка)"
+  description: "Попросить проговорить текст песни"
+  triggers:
+    commands: ["/read"]
+    keywords_any: ["прочитай", "озвучь", "услышать текст", "речитатив"]
+  examples_pos:
+    - "прочитай мою песню"
+    - "озвучь первый куплет"
+  examples_neg:
+    - "прочитай pdf"
+  slots:
+    - {name: part, type: enum[full,verse,chorus,bridge], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_read"
+
+- id: sing_stub
+  title: "Пропеть (заглушка)"
+  description: "Попросить 'спеть' песню (пока честная заглушка)"
+  triggers:
+    commands: ["/sing"]
+    keywords_any: ["спой", "пропой", "хочу услышать как песня звучит"]
+  examples_pos:
+    - "спой мою песню"
+  examples_neg:
+    - "спой чужой трек"
+  slots:
+    - {name: part, type: enum[full,verse,chorus,bridge], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_sing"
+
+- id: save_song
+  title: "Сохранить/напомнить"
+  description: "Сохранить песню и поставить напоминание"
+  triggers:
+    commands: ["/save", "/remind"]
+    keywords_any: ["сохрани", "напомни через неделю", "оставь у меня"]
+  examples_pos:
+    - "сохрани и напомни через неделю"
+  examples_neg:
+    - "сохранить файл на диск C"
+  slots:
+    - {name: remind_in, type: enum[day,week,month,none], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_save"
+
+- id: share_song
+  title: "Поделиться"
+  description: "Поделиться песней/отрывком в соцсетях/чате"
+  triggers:
+    commands: ["/share"]
+    keywords_any: ["поделиться", "отправить другу", "ссылка на песню", "шаринг"]
+  examples_pos:
+    - "поделись с другом"
+    - "сделай красивую ссылку"
+  examples_neg:
+    - "share screen"
+  slots:
+    - {name: target, type: enum[tg,link,other], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_share"
+
+- id: feedback_leave
+  title: "Оставить отзыв"
+  description: "Оставить отклик/мини-историю"
+  triggers:
+    commands: ["/feedback", "/review"]
+    keywords_any: ["отзыв", "обратная связь", "хочу поделиться впечатлением"]
+  examples_pos:
+    - "оставлю отзыв, пришли форму"
+    - "напишу отклик прямо здесь"
+  examples_neg:
+    - "фидбек по оплате"
+  slots:
+    - {name: feedback_text, type: text, required: false}
+    - {name: consent_name, type: enum[anon,name], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_feedback"
+
+- id: donate_support
+  title: "Поддержать проект"
+  description: "Мягко перейти к донату после АГА-реакции"
+  triggers:
+    commands: ["/donate", "/support"]
+    keywords_any: ["донат", "поддержать", "поблагодарить", "обнять автора"]
+  examples_pos:
+    - "хочу поддержать проект"
+    - "обнять автора"
+  examples_neg:
+    - "донат в игре"
+  slots:
+    - {name: method, type: enum[link], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_donate"
+
+- id: hug_author
+  title: "Обнять автора"
+  description: "Эмоциональная кнопка благодарности (ведёт к донату)"
+  triggers:
+    commands: ["/hug"]
+    keywords_any: ["обнять автора", "обниму", "спасибо большое"]
+  examples_pos:
+    - "обнять автора"
+  examples_neg:
+    - "обнять друга"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_hug"
+
+- id: ask_help_faq
+  title: "Помощь/FAQ"
+  description: "Справка по шагам, возможностям, примерам"
+  triggers:
+    commands: ["/help", "/faq"]
+    keywords_any: ["как это работает", "помощь", "что дальше", "покажи пример"]
+  examples_pos:
+    - "что я могу здесь делать?"
+    - "покажи пример песни"
+  examples_neg:
+    - "техподдержка провайдера"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_help"
+
+- id: privacy_consent
+  title: "Согласие на обработку ПДн"
+  description: "Зафиксировать согласие/отказ на обработку персональных данных"
+  triggers:
+    commands: ["/privacy", "/consent"]
+    keywords_any: ["согласен на обработку", "политика конфиденциальности", "ПДн"]
+  examples_pos:
+    - "согласен на обработку персональных данных"
+    - "где почитать политику?"
+  examples_neg:
+    - "обработай мои данные без согласия"
+  slots:
+    - {name: consent, type: enum[agree,decline], required: true}
+  policy:
+    min_confidence: 0.7
+    on_low_conf: "ask_clarify_privacy"
+
+- id: resume_flow
+  title: "Вернуться к шагам"
+  description: "Продолжить с места остановки/переключить этап"
+  triggers:
+    commands: ["/continue", "/next"]
+    keywords_any: ["продолжим с того места", "перейти к аранжировке", "вернёмся к припеву"]
+  examples_pos:
+    - "давай вернёмся к припеву"
+    - "перейдём к стилю"
+  examples_neg:
+    - "следующий трек"
+  slots:
+    - {name: stage, type: enum[emotion,song,arrange,read,finish], required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_resume"
+
+- id: reset_session
+  title: "Начать заново"
+  description: "Сбросить текущую сессию/контекст"
+  triggers:
+    commands: ["/reset", "/new"]
+    keywords_any: ["начать заново", "с нуля", "перезапуск"]
+  examples_pos:
+    - "давай заново"
+  examples_neg:
+    - "обнови страницу браузера"
+  slots: []
+  policy:
+    min_confidence: 0.7
+    on_low_conf: "ask_clarify_reset"
+
+- id: examples_gallery
+  title: "Показать примеры мини-историй"
+  description: "Шаблон «Песня как пример. Текст + отклик»"
+  triggers:
+    commands: ["/examples", "/gallery"]
+    keywords_any: ["пример песни", "мини-истории", "кейсы", "отзывы"]
+  examples_pos:
+    - "покажи примеры"
+    - "хочу увидеть отзывы с песнями"
+  examples_neg:
+    - "галерея фото природы"
+  slots: []
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_examples"
+
+- id: handle_resistance
+  title: "Сомнение/сопротивление"
+  description: "Мягкая работа с возражениями ('застрял', 'не понимаю', 'получится криво')"
+  triggers:
+    commands: []
+    keywords_any: ["застрял", "не понимаю", "получится криво", "сомневаюсь", "не хочу делиться", "боюсь ии"]
+  examples_pos:
+    - "сомневаюсь, что выйдет красиво"
+    - "боюсь ИИ, не знаю о чём говорить"
+  examples_neg:
+    - "сомневаюсь между двумя аккордами (муз. теория)"]
+  slots:
+    - {name: concern, type: text, required: false}
+  policy:
+    min_confidence: 0.6
+    on_low_conf: "ask_clarify_resistance"
+
+- id: unknown_fallback
+  title: "Неопознанный запрос"
+  description: "Фоллбек: аккуратно уточнить намерение"
+  triggers:
+    commands: []
+    keywords_any: []
+  examples_pos:
+    - "..."
+  examples_neg:
+    - ""
+  slots: []
+  policy:
+    min_confidence: 0.0
+    on_low_conf: "ask_rephrase_generic"

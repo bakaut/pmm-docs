@@ -1,0 +1,34 @@
+{
+  "agent_uuid": "AGENT_UUID",            // UUID вашего агента (можно опустить, если передаёте через URL)
+  "function_name": "moderate_user",      // Как агент будет вызывать функцию
+  "description": "Вызови эту функцию, когда нужно замутить или забанить пользователя Telegram на основании числа предупреждений.",
+  "input_schema": {
+    "chat_id": {
+      "description": "ID чата Telegram, в котором нужно применить модерацию",
+      "type": "integer",
+      "required": true
+    },
+    "user_id": {
+      "description": "Уникальный идентификатор пользователя в Telegram",
+      "type": "string",
+      "required": true
+    },
+    "additional_reason": {
+      "description": "Дополнительная причина для модерации",
+      "type": "string",
+      "required": false
+    }
+  },
+  "output_schema": {
+    "action_taken": {
+      "description": "Что сделала функция (mute | ban | none)",
+      "type": "string"
+    },
+    "until": {
+      "description": "UNIX-время, до которого действует мут/бан (null, если бессрочно или не применялось)",
+      "type": "integer"
+    }
+  },
+  "faas_namespace": "FAAS_NAMESPACE",     // ID пространства Functions
+  "faas_name": "FAAS_NAME"               // Имя функции в формате "namespace/function"
+}

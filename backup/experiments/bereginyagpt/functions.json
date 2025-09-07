@@ -1,0 +1,141 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Session Management API",
+    "description": "API для управления бесплатными и платными сессиями пользователей.",
+    "version": "v1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://d5d2fo2k2e7fa4p28v5p.sk0vql13.apigw.yandexcloud.net"
+    }
+  ],
+  "paths": {
+    "/start_session": {
+      "post": {
+        "operationId": "start_session",
+        "summary": "Регистрирует начало бесплатной часовой сессии",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "description": "Уникальный идентификатор сессии (берётся из поля user)"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Время начала сессии"
+                  }
+                },
+                "required": ["session_id", "timestamp"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Сессия успешно зарегистрирована" }
+        }
+      }
+    },
+    "/check_session": {
+      "post": {
+        "operationId": "check_session",
+        "summary": "Проверяет, не вышел ли бесплатный час с момента старта",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "description": "Уникальный идентификатор сессии"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Текущее время для проверки"
+                  }
+                },
+                "required": ["session_id", "timestamp"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Результат проверки сессии" }
+        }
+      }
+    },
+    "/create_payeer_payment": {
+      "post": {
+        "operationId": "create_payeer_payment",
+        "summary": "Создаёт платёжную ссылку Payeer для продления сессии",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "description": "Уникальный идентификатор сессии"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "description": "Сумма к оплате в базовой валюте магазина"
+                  },
+                  "currency": {
+                    "type": "string",
+                    "description": "Трёхбуквенный код валюты (USD, EUR, RUB…)"
+                  }
+                },
+                "required": ["session_id", "amount", "currency"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Платёжная ссылка успешно создана" }
+        }
+      }
+    },
+    "/check_payeer_payment": {
+      "post": {
+        "operationId": "check_payeer_payment",
+        "summary": "Проверяет статус платежа Payeer по payment_id",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "description": "Уникальный идентификатор сессии"
+                  },
+                  "payment_id": {
+                    "type": "string",
+                    "description": "ID платежа, полученный при создании"
+                  }
+                },
+                "required": ["session_id", "payment_id"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Статус платежа" }
+        }
+      }
+    }
+  }
+}

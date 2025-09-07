@@ -1,0 +1,10 @@
+# Требования для Python 3.12
+aiogram==3.20.0.post0             # :contentReference[oaicite:0]{index=0}  
+langchain==0.3.25                 # :contentReference[oaicite:1]{index=1}  
+httpx==0.28.1                     # :contentReference[oaicite:2]{index=2}  
+openai==1.82.0                    # :contentReference[oaicite:3]{index=3}  
+ydb==3.21.2                       # :contentReference[oaicite:4]{index=4}  
+SQLAlchemy==2.0.41                # :contentReference[oaicite:5]{index=5}  
+pydantic==2.11.5                  # :contentReference[oaicite:6]{index=6}  
+python-dotenv>=1.0.0              # (для загрузки .env файлов)  
+psycopg2-binary>=2.9.5            # (для PostgresChatMessageHistory)

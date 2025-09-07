@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClassificationResult",
+  "type": "object",
+  "required": ["class", "confidence", "steps", "risks", "recommendations", "biases"],
+  "properties": {
+    "type": {"type": "string", "enum": ["binary", "multiclass", "multilabel"]},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "class": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+    "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+    "steps": {"type": "integer", "minimum": 5},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "recommendations": {"type": "array", "items": {"type": "string"}},
+    "biases": {"type": "array", "items": {"type": "string"}},
+    "meta": {"type": "object"}
+  },
+  "additionalProperties": false
+}
