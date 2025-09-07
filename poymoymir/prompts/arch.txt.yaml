@@ -1,0 +1,5 @@
+---
+files:
+  arch_txt: prompts/arch.txt
+  classification_schema: json-schemas/archClassificationResult.json
+  uncertain_schema: json-schemas/archUncertainResult.json
